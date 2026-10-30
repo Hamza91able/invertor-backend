@@ -108,7 +108,7 @@ export function createGridService(env: Env, notifier: Notifier) {
           previous === 'unknown'
             ? `Grid power is off (detected at startup, ${at}).`
             : `Grid power lost at ${at}.`,
-        priority: 'urgent',
+        priority: 'high',
       });
     } else if (previous !== 'unknown') {
       await notifier.notify({ title: '✅ Grid online', message: `Grid power restored at ${at}.` });
