@@ -9,6 +9,7 @@ import { buildLoggerOptions } from './libraries/logger/index.js';
 import { registerErrorHandler } from './libraries/http-errors/index.js';
 
 import healthComponent from './components/health/index.js';
+import gridComponent from './components/grid/index.js';
 
 export async function buildApp(): Promise<FastifyInstance> {
   const env = loadEnv();
@@ -27,6 +28,7 @@ export async function buildApp(): Promise<FastifyInstance> {
 
   // Components: business features.
   await app.register(healthComponent);
+  await app.register(gridComponent);
 
   return app;
 }
