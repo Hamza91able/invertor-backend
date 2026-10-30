@@ -5,7 +5,11 @@ const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().positive().default(3000),
 
-  LOGGER_HOST: z.string().min(1, 'LOGGER_HOST is required'),
+  // Optional: when unset or unreachable, the logger is discovered on the LAN by serial.
+  LOGGER_HOST: z
+    .string()
+    .optional()
+    .transform((value) => value?.trim() || undefined),
   LOGGER_SERIAL: z.coerce.number().int().positive(),
   LOGGER_PORT: z.coerce.number().int().positive().default(8899),
   MODBUS_SLAVE_ID: z.coerce.number().int().min(0).max(247).default(1),

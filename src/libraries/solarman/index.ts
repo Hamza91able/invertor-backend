@@ -1,4 +1,5 @@
 import net from 'node:net';
+import os from 'node:os';
 
 /**
  * Minimal Solarman V5 client for IGEN stick loggers (LSW-3 etc.).
@@ -174,6 +175,7 @@ export async function connectSolarman(options: SolarmanOptions): Promise<Solarma
           // Loggers also push heartbeats and other unsolicited frames; skip them.
           if (candidate.readUInt16LE(3) !== CONTROL_RESPONSE) continue;
           if ((candidate[5]! & 0xff) !== seq) continue;
+          if (candidate.readUInt32LE(7) !== options.serial) continue;
           try {
             const registers = parseRegisters(candidate, slaveId, count);
             cleanup();
@@ -206,6 +208,81 @@ export async function connectSolarman(options: SolarmanOptions): Promise<Solarma
       socket.destroy();
     },
   };
+}
+
+export interface DiscoverOptions {
+  serial: number;
+  port?: number;
+  slaveId?: number;
+}
+
+const PROBE_CONNECT_TIMEOUT_MS = 1_000;
+const PROBE_READ_TIMEOUT_MS = 5_000;
+const PROBE_CONCURRENCY = 64;
+
+/** Every host address in the /24 of each local IPv4 interface. */
+function localScanTargets(): string[] {
+  const targets = new Set<string>();
+  for (const addresses of Object.values(os.networkInterfaces())) {
+    for (const address of addresses ?? []) {
+      if (address.family !== 'IPv4' || address.internal) continue;
+      const prefix = address.address.split('.').slice(0, 3).join('.');
+      for (let i = 1; i <= 254; i++) {
+        const host = `${prefix}.${i}`;
+        if (host !== address.address) targets.add(host);
+      }
+    }
+  }
+  return [...targets];
+}
+
+function isPortOpen(host: string, port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = net.createConnection({ host, port });
+    const done = (open: boolean) => {
+      socket.destroy();
+      resolve(open);
+    };
+    socket.setTimeout(PROBE_CONNECT_TIMEOUT_MS, () => done(false));
+    socket.once('connect', () => done(true));
+    socket.once('error', () => done(false));
+  });
+}
+
+async function isLogger(host: string, options: DiscoverOptions): Promise<boolean> {
+  try {
+    const connection = await connectSolarman({ ...options, host, timeoutMs: PROBE_READ_TIMEOUT_MS });
+    try {
+      await connection.readHoldingRegisters(0, 1);
+      return true;
+    } finally {
+      connection.close();
+    }
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Finds the logger on the local network: scans the /24 of each local interface
+ * for the logger port, then confirms each candidate with a read addressed to
+ * `serial` (only the matching logger answers). Returns its IP, or null.
+ */
+export async function discoverSolarman(options: DiscoverOptions): Promise<string | null> {
+  const port = options.port ?? 8899;
+  const targets = localScanTargets();
+  const open: string[] = [];
+
+  for (let i = 0; i < targets.length; i += PROBE_CONCURRENCY) {
+    const batch = targets.slice(i, i + PROBE_CONCURRENCY);
+    const results = await Promise.all(batch.map((host) => isPortOpen(host, port)));
+    batch.forEach((host, index) => results[index] && open.push(host));
+  }
+
+  for (const host of open) {
+    if (await isLogger(host, options)) return host;
+  }
+  return null;
 }
 
 /** Interprets a 16-bit register as a signed integer. */

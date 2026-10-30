@@ -1,4 +1,4 @@
-import { connectSolarman } from '../../libraries/solarman/index.js';
+import { connectSolarman, discoverSolarman } from '../../libraries/solarman/index.js';
 import type { Notifier } from '../../libraries/notifier/index.js';
 import type { Env } from '../../libraries/config/index.js';
 import { logger } from '../../libraries/logger/index.js';
@@ -13,6 +13,9 @@ const MIN_ONLINE_FREQUENCY = 45;
 
 // A new state only counts after this many consecutive agreeing reads.
 const CONFIRMATIONS = 2;
+
+// Consecutive failed polls before the logger's IP is rediscovered.
+const FAILURES_BEFORE_RESCAN = 3;
 
 export type GridState = 'online' | 'offline' | 'unknown';
 
@@ -37,10 +40,29 @@ export function createGridService(env: Env, notifier: Notifier) {
   let lastNotified: GridState = 'unknown';
   let timer: NodeJS.Timeout | null = null;
   let stopped = false;
+  // Configured IP is tried first; otherwise (or after repeated failures) the logger is discovered.
+  let host: string | null = env.LOGGER_HOST ?? null;
+  let failures = 0;
+
+  async function resolveHost(): Promise<string> {
+    if (host) return host;
+
+    logger.info('Scanning local network for the logger...');
+    const found = await discoverSolarman({
+      serial: env.LOGGER_SERIAL,
+      port: env.LOGGER_PORT,
+      slaveId: env.MODBUS_SLAVE_ID,
+    });
+    if (!found) throw new Error('Logger not found on the local network');
+
+    logger.info(`Logger found at ${found}`);
+    host = found;
+    return host;
+  }
 
   async function read(): Promise<GridReading> {
     const connection = await connectSolarman({
-      host: env.LOGGER_HOST,
+      host: await resolveHost(),
       serial: env.LOGGER_SERIAL,
       port: env.LOGGER_PORT,
       slaveId: env.MODBUS_SLAVE_ID,
@@ -118,9 +140,18 @@ export function createGridService(env: Env, notifier: Notifier) {
   async function tick(): Promise<void> {
     try {
       await applyReading(await read());
+      failures = 0;
     } catch (err) {
       status.lastError = err instanceof Error ? err.message : String(err);
       logger.warn(`Grid poll failed: ${status.lastError}`);
+
+      // The logger's IP may have changed (e.g. router restart): rediscover it.
+      failures += 1;
+      if (host && failures >= FAILURES_BEFORE_RESCAN) {
+        logger.warn(`Logger at ${host} unreachable ${failures} times; will rescan`);
+        host = null;
+        failures = 0;
+      }
     }
     if (!stopped) timer = setTimeout(tick, env.GRID_POLL_INTERVAL_MS);
   }
