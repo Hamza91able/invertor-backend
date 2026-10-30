@@ -34,6 +34,7 @@ export interface GridStatus {
 export function createGridService(env: Env, notifier: Notifier) {
   const status: GridStatus = { state: 'unknown', since: null, lastReading: null, lastError: null };
   let pending: { online: boolean; count: number } | null = null;
+  let lastNotified: GridState = 'unknown';
   let timer: NodeJS.Timeout | null = null;
   let stopped = false;
 
@@ -84,15 +85,34 @@ export function createGridService(env: Env, notifier: Notifier) {
 
     if (previous === 'unknown') {
       logger.info(`Grid initial state: ${observed} (${reading.voltage} V, ${reading.frequency} Hz)`);
-      return;
+    } else {
+      logger.info(`Grid changed: ${previous} -> ${observed}`);
     }
 
-    logger.info(`Grid changed: ${previous} -> ${observed}`);
-    await notifier.notify(
-      observed === 'offline'
-        ? { title: '⚠️ Grid offline', message: `Grid power lost at ${reading.readAt}.`, priority: 'urgent' }
-        : { title: '✅ Grid online', message: `Grid power restored at ${reading.readAt}.` },
-    );
+    await notifyIfNeeded(observed, previous, reading.readAt);
+  }
+
+  /**
+   * Sends at most one alert per state. An outage already in progress at startup
+   * is alerted; a healthy grid at startup is not. In-memory only, so a restart
+   * during an outage re-sends the offline alert.
+   */
+  async function notifyIfNeeded(state: GridState, previous: GridState, at: string): Promise<void> {
+    if (state === lastNotified) return;
+    lastNotified = state;
+
+    if (state === 'offline') {
+      await notifier.notify({
+        title: '⚠️ Grid offline',
+        message:
+          previous === 'unknown'
+            ? `Grid power is off (detected at startup, ${at}).`
+            : `Grid power lost at ${at}.`,
+        priority: 'urgent',
+      });
+    } else if (previous !== 'unknown') {
+      await notifier.notify({ title: '✅ Grid online', message: `Grid power restored at ${at}.` });
+    }
   }
 
   async function tick(): Promise<void> {
