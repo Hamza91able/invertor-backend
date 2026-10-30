@@ -106,8 +106,8 @@ export function createGridService(env: Env, notifier: Notifier) {
         title: '⚠️ Grid offline',
         message:
           previous === 'unknown'
-            ? `Grid power is off (detected at startup, ${at}).`
-            : `Grid power lost at ${at}.`,
+            ? `Grid power is off.`
+            : `Grid power lost`,
         priority: 'high',
       });
     } else if (previous !== 'unknown') {
