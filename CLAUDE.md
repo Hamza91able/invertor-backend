@@ -5,6 +5,10 @@ Guidance for Claude Code and any agent working in this repo.
 Backend for talking to a solar inverter through its Solarman (IGEN LSW-3) WiFi
 stick logger over the LAN — Solarman V5 protocol on TCP 8899, wrapping Modbus RTU.
 
+**Start here:** if `notes/system.md` exists, read it first — private (git-ignored)
+notes on the system, verified registers, settings, energy stats, and decisions.
+This repo is public: never commit serials, IPs, keys, or personal data.
+
 ## Architecture — MUST FOLLOW
 
 Structured **by self-contained components**, not by technical role (same pattern
