@@ -3,7 +3,8 @@ import type { Env } from '../config/index.js';
 
 /**
  * Delivery channel for user-facing alerts. Every notification is logged; it is
- * also pushed via Pushover when its credentials are configured.
+ * also pushed via Pushover when its credentials are configured. `notify`
+ * rejects if the push fails, so callers can retry.
  */
 export interface Notification {
   title: string;
@@ -45,17 +46,13 @@ function createPushoverNotifier(appToken: string, userKey: string): Notifier {
         body.set('expire', String(EMERGENCY_EXPIRE_SECONDS));
       }
 
-      try {
-        const response = await fetch(PUSHOVER_URL, {
-          method: 'POST',
-          body,
-          signal: AbortSignal.timeout(10_000),
-        });
-        if (!response.ok) {
-          logger.error(`Pushover push failed: HTTP ${response.status} ${await response.text()}`);
-        }
-      } catch (err) {
-        logger.error(`Pushover push failed: ${err instanceof Error ? err.message : String(err)}`);
+      const response = await fetch(PUSHOVER_URL, {
+        method: 'POST',
+        body,
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (!response.ok) {
+        throw new Error(`Pushover push failed: HTTP ${response.status} ${await response.text()}`);
       }
     },
   };

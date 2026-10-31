@@ -17,6 +17,9 @@ const CONFIRMATIONS = 2;
 // Consecutive failed polls before the logger's IP is rediscovered.
 const FAILURES_BEFORE_RESCAN = 3;
 
+// A failed alert is retried once per poll, at most this many times.
+const MAX_NOTIFY_RETRIES = 10;
+
 export type GridState = 'online' | 'offline' | 'unknown';
 
 export interface GridReading {
@@ -43,6 +46,8 @@ export function createGridService(env: Env, notifier: Notifier) {
   // Configured IP is tried first; otherwise (or after repeated failures) the logger is discovered.
   let host: string | null = env.LOGGER_HOST ?? null;
   let failures = 0;
+  let notifyFailures = 0;
+  let notifyFailedState: GridState = 'unknown';
 
   async function resolveHost(): Promise<string> {
     if (host) return host;
@@ -110,31 +115,34 @@ export function createGridService(env: Env, notifier: Notifier) {
     } else {
       logger.info(`Grid changed: ${previous} -> ${observed}`);
     }
-
-    await notifyIfNeeded(observed, previous, reading.readAt);
   }
 
   /**
    * Sends at most one alert per state. An outage already in progress at startup
    * is alerted; a healthy grid at startup is not. In-memory only, so a restart
    * during an outage re-sends the offline alert.
+   *
+   * Runs every poll: an alert only counts as sent once the push succeeds, so a
+   * failed push is retried on the next poll.
    */
-  async function notifyIfNeeded(state: GridState, previous: GridState, at: string): Promise<void> {
-    if (state === lastNotified) return;
-    lastNotified = state;
+  async function notifyIfNeeded(): Promise<void> {
+    const state = status.state;
+    if (state === 'unknown' || state === lastNotified) return;
 
     if (state === 'offline') {
       await notifier.notify({
         title: '⚠️ Grid offline',
         message:
-          previous === 'unknown'
+          lastNotified === 'unknown'
             ? `Grid power is off.`
             : `Grid power lost`,
         priority: 'high',
       });
-    } else if (previous !== 'unknown') {
-      await notifier.notify({ title: '✅ Grid online', message: `Grid power restored at ${at}.` });
+    } else if (lastNotified !== 'unknown') {
+      await notifier.notify({ title: '✅ Grid online', message: `Grid power restored at ${status.since}.` });
     }
+
+    lastNotified = state;
   }
 
   async function tick(): Promise<void> {
@@ -153,6 +161,26 @@ export function createGridService(env: Env, notifier: Notifier) {
         failures = 0;
       }
     }
+    try {
+      await notifyIfNeeded();
+      notifyFailures = 0;
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      // Count failures per alert: a new grid state starts a fresh count.
+      if (notifyFailedState !== status.state) notifyFailures = 0;
+      notifyFailedState = status.state;
+      notifyFailures += 1;
+      if (notifyFailures > MAX_NOTIFY_RETRIES) {
+        logger.error(`Notification failed, giving up after ${MAX_NOTIFY_RETRIES} retries: ${reason}`);
+        lastNotified = status.state;
+        notifyFailures = 0;
+      } else {
+        logger.error(
+          `Notification failed, will retry next poll (${notifyFailures}/${MAX_NOTIFY_RETRIES}): ${reason}`,
+        );
+      }
+    }
+
     if (!stopped) timer = setTimeout(tick, env.GRID_POLL_INTERVAL_MS);
   }
 
